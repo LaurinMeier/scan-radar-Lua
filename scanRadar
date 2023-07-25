@@ -1,0 +1,82 @@
+--proof of concept radar contact sorter made for the VS code plugin StormworksLifeboatAPI
+
+
+
+function screen.drawPixel(x,y,r,g,b)
+    screen.setColor(r,g,b)
+    screen.drawRectF(math.floor(x+0.5),math.floor(y+0.5),1,1)
+end
+
+function pulse(bool,name)
+    local res = false
+    if not dshw then dshw = {} end
+    if bool and not dshw[name] or false then res = true end
+    dshw[name] = bool
+    return res
+end
+
+
+distThreshold = 10
+maxLifetime = 3
+knownTargets = {}
+function sortContacts(contact)
+    if not knownTargets then knownTargets = {} end --initialize global table if it doesnt exist
+
+    local close = false
+
+    for i,target in pairs(knownTargets) do --iterate through knownTargets
+        dist = math.sqrt((target.x - contact.x)^2 + (target.y - contact.y)^2)
+
+        if dist < distThreshold then
+            knownTargets[i] = {x=contact.x, y=contact.y, time=maxLifetime} --update
+            close = true --detect the update
+        end
+    end
+
+    if not close then --add new target in case of no updates
+        table.insert(knownTargets, {x=contact.x, y=contact.y, time=maxLifetime})
+    end
+end
+
+function updateTimes()
+    for i,target in pairs(knownTargets) do
+        if target.time <=0 then
+            knownTargets[i] = nil --remove old targets
+        else
+            knownTargets[i].time = knownTargets[i].time - 1 --update times
+        end
+    end
+end
+
+
+contacts = {}
+
+function onTick()
+    x = input.getNumber(3) --mouseX
+    y = input.getNumber(4) --mouseY
+
+    if not (x < 10 and y < 10) and input.getBool(1) then --add new 2d vector to contacts on mouse press
+        table.insert(contacts, {x=x, y=y})
+    end
+
+    if x < 10 and y < 10 and pulse(input.getBool(1), "sort") then --if top left corner is pressed
+        for i,contact in pairs(contacts) do --sort all targets
+            sortContacts(contact)
+        end
+
+        updateTimes() --update ONCE
+        
+        contacts = {} --reset contacts
+    end
+end
+
+function onDraw()
+    for i,target in pairs(knownTargets) do
+        screen.drawPixel(target.x, target.y, 255,255,255)
+        screen.drawText(target.x + 3, target.y, i)
+    end
+    
+    for i,contact in pairs(contacts) do
+        screen.drawPixel(contact.x, contact.y, 0,255,0)
+    end
+end
