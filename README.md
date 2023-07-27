@@ -12,9 +12,9 @@ The scan radar project will enable the sorting of unknown contacts, such that an
 
 The (planned) features are:
 
-- creation of new targets - (done)
-- updating of known targets - (done)
-- deletion of old targets after a set amount of ticks - (done)
+- creation of new targets (done)
+- updating of known targets (done)
+- deletion of old targets after a set amount of ticks (done)
 - filtering the noise induced by the new radar component
 - calculation of each known target velocity vector
 - extrapolation when no update for set amount of ticks (done)
