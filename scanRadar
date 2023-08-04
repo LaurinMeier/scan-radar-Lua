@@ -2,8 +2,7 @@
 
 
 
-function screen.drawPixel(x,y,r,g,b)
-    screen.setColor(r,g,b)
+function screen.drawPixel(x,y)
     screen.drawRectF(math.floor(x+0.5),math.floor(y+0.5),1,1)
 end
 
@@ -15,68 +14,196 @@ function pulse(bool,name)
     return res
 end
 
+function map(x, min, max, low, high)
+    return (x-min)/(max-min)*(high-low)+low
+end
 
-distThreshold = 10
-maxLifetime = 3
+function delta(x, name)
+    if not ksnfi then ksnfi = {} end
+    local delta = x-(ksnfi[name] or x)
+    ksnfi[name]=x
+    return delta
+end
+
+
+function EMA(x,a,name)
+    if not EMAtbl then EMAtbl={} end
+    local y = a*x+(1-a)*(EMAtbl[name] or x)
+    EMAtbl[name] = y
+    return y
+end
+
+function EMAext(x,a,b,name)
+    if not EMAtblExtr then EMAtblExtr={} end
+    local EMAval = EMA(x, a, name)
+    local EMAext = EMAval + EMA(EMAval-(EMAtblExtr[name] or EMAval), b, name.."2")*(1/a)
+    EMAtblExtr[name] = EMAval
+    return EMAext
+end
+
+function reset(i)
+    EMAtbl["knownX"..i]=nil
+    EMAtbl["knownX"..i.."2"]=nil
+    EMAtblExtr["knownX"..i]=nil
+
+    EMAtbl["knownY"..i]=nil
+    EMAtbl["knownY"..i.."2"]=nil
+    EMAtblExtr["knownY"..i]=nil
+
+    EMAtbl["knownZ"..i]=nil
+    EMAtbl["knownZ"..i.."2"]=nil
+    EMAtblExtr["knownZ"..i]=nil
+
+    EMAtbl["velX"..i]=nil
+    EMAtbl["velY"..i]=nil
+    EMAtbl["velZ"..i]=nil
+
+    ksnfi["velX"..i]=nil
+    ksnfi["velY"..i]=nil
+    ksnfi["velZ"..i]=nil
+end
+
+
+posGain = 0.02
+velGain = 0.02
+extrapolationGain = 0.1
+distThreshold = math.sqrt(32)*5
+maxLifetime = 300
 knownTargets = {}
+filteredKnownTargets = {}
+filteredVel = {}
+
 function sortContacts(contact)
-    if not knownTargets then knownTargets = {} end --initialize global table if it doesnt exist
-
-    local close = false
-
-    for i,target in pairs(knownTargets) do --iterate through knownTargets
-        dist = math.sqrt((target.x - contact.x)^2 + (target.y - contact.y)^2)
-
-        if dist < distThreshold then
-            knownTargets[i] = {x=contact.x, y=contact.y, time=maxLifetime} --update
-            close = true --detect the update
-        end
+    contact.z=contact.z or 0
+    local nearestTargets = {}
+    for i,v in pairs(knownTargets)do
+        nearestTargets[i]=v
+        nearestTargets[i].id=i
     end
-
-    if not close then --add new target in case of no updates
-        table.insert(knownTargets, {x=contact.x, y=contact.y, time=maxLifetime})
+    table.sort(nearestTargets, function(a,b)return math.sqrt((a.x-contact.x)^2+(a.y-contact.y)^2+(a.z-contact.z)^2)<math.sqrt((b.x-contact.x)^2+(b.y-contact.y)^2+(b.z-contact.z)^2) end)
+    
+    if #knownTargets>0 then
+        local dist = math.sqrt((nearestTargets[1].x-contact.x)^2+(nearestTargets[1].y-contact.y)^2+(nearestTargets[1].z-contact.z)^2)
+        if dist < distThreshold then --update when within x distance
+            local lastTime = knownTargets[nearestTargets[1].id].time --save lifeTime of last update
+            knownTargets[nearestTargets[1].id] = {x=contact.x,y=contact.y,z=contact.z,time=maxLifetime,lastTime=lastTime}
+        end
+        if dist > distThreshold*2 then --add new when outside of x*2 distance for noise reasons
+            table.insert(knownTargets, {x=contact.x,y=contact.y,z=contact.z,time=maxLifetime})
+        end
+    else
+        table.insert(knownTargets, {x=contact.x,y=contact.y,z=contact.z,time=maxLifetime}) --add new when no knownTarget is present
     end
 end
+
 
 function updateTimes()
     for i,target in pairs(knownTargets) do
         if target.time <=0 then
             knownTargets[i] = nil --remove old targets
+            filteredKnownTargets[i] = nil
+            reset(i)
         else
-            knownTargets[i].time = knownTargets[i].time - 1 --update times
+            if knownTargets[i].time ~= maxLifetime then --when not updated:
+                knownTargets[i].x = knownTargets[i].x + filteredVel[i].x --interpolate with filtered velocity
+                knownTargets[i].y = knownTargets[i].y + filteredVel[i].y
+                knownTargets[i].z = knownTargets[i].z + filteredVel[i].z
+                filteredKnownTargets[i] = {
+                    x = EMAext(target.x, posGain, velGain, "knownX"..i), --update the EMA filter
+                    y = EMAext(target.y, posGain, velGain, "knownY"..i),
+                    z = EMAext(target.z, posGain, velGain, "knownZ"..i),
+                    time = target.time
+                }
+            else --when updated:
+                filteredKnownTargets[i] = { --update the EMA filter
+                    x = EMAext(target.x, posGain, velGain, "knownX"..i),
+                    y = EMAext(target.y, posGain, velGain, "knownY"..i),
+                    z = EMAext(target.z, posGain, velGain, "knownZ"..i),
+                    time = target.time
+                }
+
+                --filter the velocity
+                filteredVel[i] = {x=EMA(delta(target.x, "velX"..i)/(maxLifetime-(target.lastTime or maxLifetime-1)),extrapolationGain,"velX"), y=EMA(delta(target.y, "velY"..i)/(maxLifetime-(target.lastTime or maxLifetime-1)),extrapolationGain,"velY"),  z=EMA(delta(target.z, "velZ"..i)/(maxLifetime-(target.lastTime or maxLifetime-1)),extrapolationGain,"velZ")}
+            end
+
+            knownTargets[i].time = target.time - 1 --update times
+            filteredKnownTargets[i].time = target.time
         end
     end
 end
 
 
 contacts = {}
+t = 0
+
+space = 0
 
 function onTick()
     x = input.getNumber(3) --mouseX
     y = input.getNumber(4) --mouseY
 
-    if not (x < 10 and y < 10) and input.getBool(1) then --add new 2d vector to contacts on mouse press
+    --only used for debugging
+    ---------------------------------------------------------------------------------------------------------------------------------------------
+    if not (x < 10 and y < 10) and pulse(input.getBool(1), "add") then --add new 2d vector to contacts on mouse press
         table.insert(contacts, {x=x, y=y})
     end
 
     if x < 10 and y < 10 and pulse(input.getBool(1), "sort") then --if top left corner is pressed
         for i,contact in pairs(contacts) do --sort all targets
             sortContacts(contact)
+            
         end
 
-        updateTimes() --update ONCE
-        
+        if space%5==0 then
+            sortContacts({x=space*1,y=50})
+        end
+
+        updateTimes()
+
         contacts = {} --reset contacts
+
+        space = space + 1
     end
+    ---------------------------------------------------------------------------------------------------------------------------------------------
+    
+
+    if t<180 and t%10==0 then --test first set
+        table.insert(contacts, {x=t*0.25+math.random(-10,10)/10*2, y=20+t*0.1+math.random(-10,10)/10*2})
+        table.insert(contacts, {x=t*0.15+math.random(-10,10)/10*2, y=80-t*0.1+math.random(-10,10)/10*2})
+
+        sortContacts(contacts[1])
+        sortContacts(contacts[2])
+    end
+
+    if t>600 and t%10==0 then --test second set
+        table.insert(contacts, {x=96-(t-600)*0.25+math.random(-10,10)/10*2, y=20+(t-600)*0.1+math.random(-10,10)/10*2})
+        table.insert(contacts, {x=96-(t-600)*0.15+math.random(-10,10)/10*2, y=80-(t-600)*0.1+math.random(-10,10)/10*2})
+
+        sortContacts(contacts[2])
+        sortContacts(contacts[1])
+    end
+
+    updateTimes()
+
+    t = t + 1
 end
 
 function onDraw()
-    for i,target in pairs(knownTargets) do
-        screen.drawPixel(target.x, target.y, 255,255,255)
+    for i,target in pairs(filteredKnownTargets) do
+        screen.setColor(255,255,255, map((target.time+1) / maxLifetime, 0, 1, 100, 255))
+        screen.drawPixel(target.x, target.y)
         screen.drawText(target.x + 3, target.y, i)
     end
     
+    screen.setColor(0,255,0)
     for i,contact in pairs(contacts) do
-        screen.drawPixel(contact.x, contact.y, 0,255,0)
+        screen.drawPixel(contact.x, contact.y)
     end
+
+    if filteredVel[1] then
+        screen.drawText(1,1,filteredVel[1].x)
+    end
+
+
+    contacts = {}
 end
