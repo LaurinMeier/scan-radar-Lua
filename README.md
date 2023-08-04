@@ -15,8 +15,8 @@ The (planned) features are:
 - creation of new targets (done)
 - updating of known targets (done)
 - deletion of old targets after a set amount of ticks (done)
-- filtering the noise induced by the new radar component
-- calculation of each known target velocity vector
+- filtering the noise induced by the new radar component (done)
+- calculation of each known target velocity vector (done)
 - extrapolation when no update for set amount of ticks (done)
 - assigning a threat level to each target based on distance and closing rate or velocity vector
 - selecting and keeping a target for engagement for set time
