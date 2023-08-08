@@ -2,6 +2,23 @@
 
 
 
+pi2=math.pi*2
+ign=input.getNumber
+sin=math.sin
+cos=math.cos
+
+vec=function(x,y,z)return{x=x or 0,y=y or 0,z=z or 0}end
+function Cross(A,B)return vec(A.y*B.z-A.z*B.y,A.z*B.x-A.x*B.z,A.x*B.y-A.y*B.x)end
+function clamp(x,l,h)return math.min(h,math.max(x,l))end
+function antiNan(x)return x==x and x or 0 end
+
+function radarToGlobal(dist, az, el, pos, orth)
+	local x=sin(az*pi2)*cos(el*pi2)*dist
+	local y=cos(az*pi2)*cos(el*pi2)*dist
+	local z=sin(el*pi2)*dist
+	return vec(orth.r.x*x+orth.f.x*y+orth.u.x*z+pos.x,  orth.r.y*x+orth.f.y*y+orth.u.y*z+pos.y,   orth.r.z*x+orth.f.z*y+orth.u.z*z+pos.z)
+end
+
 function screen.drawPixel(x,y)
     screen.drawRectF(math.floor(x+0.5),math.floor(y+0.5),1,1)
 end
@@ -14,8 +31,12 @@ function pulse(bool,name)
     return res
 end
 
-function map(x, min, max, low, high)
+function math.map(x, min, max, low, high)
     return (x-min)/(max-min)*(high-low)+low
+end
+
+function dist(x1,y1,z1,x2,y2,z2)
+    return math.sqrt((x1-x2)^2+(y1-y2)^2+(z1-z2)^2)
 end
 
 function delta(x, name)
@@ -64,11 +85,11 @@ function reset(i)
 end
 
 
-posGain = 0.02
-velGain = 0.02
-extrapolationGain = 0.1
-distThreshold = math.sqrt(32)*5
-maxLifetime = 300
+posGain = 0.001
+velGain = 0.001
+extrapolationGain = 0.01
+distThreshold = 300
+maxLifetime = 900
 knownTargets = {}
 filteredKnownTargets = {}
 filteredVel = {}
@@ -77,11 +98,12 @@ function sortContacts(contact)
     contact.z=contact.z or 0
     local nearestTargets = {}
     for i,v in pairs(knownTargets)do
-        nearestTargets[i]=v
-        nearestTargets[i].id=i
+        v.id = i
+        table.insert(nearestTargets, v)
     end
     table.sort(nearestTargets, function(a,b)return math.sqrt((a.x-contact.x)^2+(a.y-contact.y)^2+(a.z-contact.z)^2)<math.sqrt((b.x-contact.x)^2+(b.y-contact.y)^2+(b.z-contact.z)^2) end)
     
+
     if #knownTargets>0 then
         local dist = math.sqrt((nearestTargets[1].x-contact.x)^2+(nearestTargets[1].y-contact.y)^2+(nearestTargets[1].z-contact.z)^2)
         if dist < distThreshold then --update when within x distance
@@ -123,7 +145,12 @@ function updateTimes()
                 }
 
                 --filter the velocity
-                filteredVel[i] = {x=EMA(delta(target.x, "velX"..i)/(maxLifetime-(target.lastTime or maxLifetime-1)),extrapolationGain,"velX"), y=EMA(delta(target.y, "velY"..i)/(maxLifetime-(target.lastTime or maxLifetime-1)),extrapolationGain,"velY"),  z=EMA(delta(target.z, "velZ"..i)/(maxLifetime-(target.lastTime or maxLifetime-1)),extrapolationGain,"velZ")}
+                debug = (maxLifetime-(target.lastTime or maxLifetime-1))
+                filteredVel[i] = {
+                    x=EMA(delta(target.x, "velX"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain,"velX"..i),
+                    y=EMA(delta(target.y, "velY"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain,"velY"..i),
+                    z=EMA(delta(target.z, "velZ"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain,"velZ"..i)
+                }
             end
 
             knownTargets[i].time = target.time - 1 --update times
@@ -133,77 +160,62 @@ function updateTimes()
 end
 
 
-contacts = {}
-t = 0
 
-space = 0
-
+contacts={}
 function onTick()
-    x = input.getNumber(3) --mouseX
-    y = input.getNumber(4) --mouseY
+    pos = vec(ign(1),ign(3),ign(2))
+	rx,ry,rz=ign(4),ign(5),ign(6)
+	cx,cy,cz=cos(rx),cos(ry),cos(rz)
+	sx,sy,sz=sin(rx),sin(ry),sin(rz)
+	right = vec(cy*cz, -sy, cy*sz)
+	fwd = vec(sx*sz + cx*sy*cz, cx*cy, -sx*cz + cx*sy*sz)
+	up = Cross(right,fwd)
+	orth = {r=right,f=fwd,u=up}
+	
+    --for i=1,5 do
+	    --sortContacts(radarToGlobal(ign((i-1)*3+1+6),ign((i-1)*3+2+6),ign((i-1)*3+3+6),pos,orth))
+    --end
+    --updateTimes()
 
-    --only used for debugging
-    ---------------------------------------------------------------------------------------------------------------------------------------------
-    if not (x < 10 and y < 10) and pulse(input.getBool(1), "add") then --add new 2d vector to contacts on mouse press
-        table.insert(contacts, {x=x, y=y})
-    end
-
-    if x < 10 and y < 10 and pulse(input.getBool(1), "sort") then --if top left corner is pressed
-        for i,contact in pairs(contacts) do --sort all targets
-            sortContacts(contact)
-            
+    for i=1,5 do
+        if ign((i-1)*3+1+6) > 100 then
+            sortContacts(radarToGlobal(ign((i-1)*3+1+6),ign((i-1)*3+2+6),ign((i-1)*3+3+6),pos,orth))
         end
-
-        if space%5==0 then
-            sortContacts({x=space*1,y=50})
-        end
-
-        updateTimes()
-
-        contacts = {} --reset contacts
-
-        space = space + 1
-    end
-    ---------------------------------------------------------------------------------------------------------------------------------------------
-    
-
-    if t<180 and t%10==0 then --test first set
-        table.insert(contacts, {x=t*0.25+math.random(-10,10)/10*2, y=20+t*0.1+math.random(-10,10)/10*2})
-        table.insert(contacts, {x=t*0.15+math.random(-10,10)/10*2, y=80-t*0.1+math.random(-10,10)/10*2})
-
-        sortContacts(contacts[1])
-        sortContacts(contacts[2])
-    end
-
-    if t>600 and t%10==0 then --test second set
-        table.insert(contacts, {x=96-(t-600)*0.25+math.random(-10,10)/10*2, y=20+(t-600)*0.1+math.random(-10,10)/10*2})
-        table.insert(contacts, {x=96-(t-600)*0.15+math.random(-10,10)/10*2, y=80-(t-600)*0.1+math.random(-10,10)/10*2})
-
-        sortContacts(contacts[2])
-        sortContacts(contacts[1])
     end
 
     updateTimes()
 
-    t = t + 1
+    if filteredKnownTargets[1] then
+        output.setNumber(1,filteredKnownTargets[1].x)
+        output.setNumber(2,filteredKnownTargets[1].y)
+        output.setNumber(3,filteredKnownTargets[1].z)
+    end
 end
 
+zoom = 5
 function onDraw()
-    for i,target in pairs(filteredKnownTargets) do
-        screen.setColor(255,255,255, map((target.time+1) / maxLifetime, 0, 1, 100, 255))
-        screen.drawPixel(target.x, target.y)
-        screen.drawText(target.x + 3, target.y, i)
+    w=screen.getWidth()
+	h=screen.getHeight()
+	screen.drawMap(pos.x,pos.y,zoom)
+    screen.setColor(255,0,0)
+	for i,v in pairs(knownTargets) do
+        pixelX, pixelY = map.mapToScreen(pos.x, pos.y, zoom, w, h, v.x, v.y)
+	    screen.drawRectF(pixelX,pixelY,1,1)
     end
-    
-    screen.setColor(0,255,0)
-    for i,contact in pairs(contacts) do
-        screen.drawPixel(contact.x, contact.y)
+
+    if filteredKnownTargets[1] then
+        screen.drawText(1,1,math.floor(filteredKnownTargets[1].x))
+        screen.drawText(1,10,math.floor(filteredKnownTargets[1].y))
+    else
+        screen.drawText(1,1,"nuh uh")
     end
 
     if filteredVel[1] then
-        screen.drawText(1,1,filteredVel[1].x)
+        screen.drawText(50,1,math.floor(filteredVel[1].x*100)/100)
+        screen.drawText(50,10,math.floor(filteredVel[1].y*100)/100)
+    else
+        screen.drawText(50,1,"nuh uh")
     end
 
-
-    contacts = {}
+    screen.drawText(1,30,debug)
 end
