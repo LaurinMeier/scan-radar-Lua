@@ -35,8 +35,8 @@ function math.map(x, min, max, low, high)
     return (x-min)/(max-min)*(high-low)+low
 end
 
-function dist(x1,y1,z1,x2,y2,z2)
-    return math.sqrt((x1-x2)^2+(y1-y2)^2+(z1-z2)^2)
+function distVec(A,B)
+    return math.sqrt((A.x-B.x)^2+(A.y-B.y)^2+(A.z-B.z)^2)
 end
 
 function delta(x, name)
@@ -85,14 +85,15 @@ function reset(i)
 end
 
 
-posGain = 0.001
-velGain = 0.001
-extrapolationGain = 0.01
-distThreshold = 300
+posGain = property.getNumber("posGain")
+velGain = property.getNumber("velGain")
+extrapolationGain = property.getNumber("extrapolationGain")
+distThreshold = 500
 maxLifetime = 900
 knownTargets = {}
 filteredKnownTargets = {}
 filteredVel = {}
+rawKnownTargets = {}
 
 function sortContacts(contact)
     contact.z=contact.z or 0
@@ -101,20 +102,26 @@ function sortContacts(contact)
         v.id = i
         table.insert(nearestTargets, v)
     end
-    table.sort(nearestTargets, function(a,b)return math.sqrt((a.x-contact.x)^2+(a.y-contact.y)^2+(a.z-contact.z)^2)<math.sqrt((b.x-contact.x)^2+(b.y-contact.y)^2+(b.z-contact.z)^2) end)
+    table.sort(nearestTargets, function(a,b)return distVec(a,contact)<distVec(b,contact) end)
     
 
     if #knownTargets>0 then
-        local dist = math.sqrt((nearestTargets[1].x-contact.x)^2+(nearestTargets[1].y-contact.y)^2+(nearestTargets[1].z-contact.z)^2)
-        if dist < distThreshold then --update when within x distance
+        local dist = distVec(nearestTargets[1],contact)
+        local distPos = distVec(pos, contact)
+        if dist < distThreshold*math.max(distPos/5000,1) then --update when within x distance
             local lastTime = knownTargets[nearestTargets[1].id].time --save lifeTime of last update
             knownTargets[nearestTargets[1].id] = {x=contact.x,y=contact.y,z=contact.z,time=maxLifetime,lastTime=lastTime}
+            rawKnownTargets[nearestTargets[1].id] = {x=contact.x,y=contact.y,z=contact.z}
         end
-        if dist > distThreshold*2 then --add new when outside of x*2 distance for noise reasons
+        if dist > distThreshold*2*math.max(distPos/5000,1) then --add new when outside of x*2 distance for noise reasons
+            local ind = #knownTargets+1
             table.insert(knownTargets, {x=contact.x,y=contact.y,z=contact.z,time=maxLifetime})
+            rawKnownTargets[ind] = {x=contact.x,y=contact.y,z=contact.z}
         end
     else
+        local ind = #knownTargets+1
         table.insert(knownTargets, {x=contact.x,y=contact.y,z=contact.z,time=maxLifetime}) --add new when no knownTarget is present
+        rawKnownTargets[ind] = {x=contact.x,y=contact.y,z=contact.z}
     end
 end
 
@@ -126,30 +133,31 @@ function updateTimes()
             filteredKnownTargets[i] = nil
             reset(i)
         else
+            local dist = distVec(pos, target)
             if knownTargets[i].time ~= maxLifetime then --when not updated:
                 knownTargets[i].x = knownTargets[i].x + filteredVel[i].x --interpolate with filtered velocity
                 knownTargets[i].y = knownTargets[i].y + filteredVel[i].y
                 knownTargets[i].z = knownTargets[i].z + filteredVel[i].z
                 filteredKnownTargets[i] = {
-                    x = EMAext(target.x, posGain, velGain, "knownX"..i), --update the EMA filter
-                    y = EMAext(target.y, posGain, velGain, "knownY"..i),
-                    z = EMAext(target.z, posGain, velGain, "knownZ"..i),
+                    x = EMAext(target.x, posGain/(dist/1000), velGain/(dist/1000), "knownX"..i), --update the EMA filter
+                    y = EMAext(target.y, posGain/(dist/1000), velGain/(dist/1000), "knownY"..i),
+                    z = EMAext(target.z, posGain/(dist/1000), velGain/(dist/1000), "knownZ"..i),
                     time = target.time
                 }
             else --when updated:
                 filteredKnownTargets[i] = { --update the EMA filter
-                    x = EMAext(target.x, posGain, velGain, "knownX"..i),
-                    y = EMAext(target.y, posGain, velGain, "knownY"..i),
-                    z = EMAext(target.z, posGain, velGain, "knownZ"..i),
+                    x = EMAext(target.x, posGain/(dist/1000), velGain/(dist/1000), "knownX"..i),
+                    y = EMAext(target.y, posGain/(dist/1000), velGain/(dist/1000), "knownY"..i),
+                    z = EMAext(target.z, posGain/(dist/1000), velGain/(dist/1000), "knownZ"..i),
                     time = target.time
                 }
 
                 --filter the velocity
                 debug = (maxLifetime-(target.lastTime or maxLifetime-1))
                 filteredVel[i] = {
-                    x=EMA(delta(target.x, "velX"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain,"velX"..i),
-                    y=EMA(delta(target.y, "velY"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain,"velY"..i),
-                    z=EMA(delta(target.z, "velZ"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain,"velZ"..i)
+                    x=EMA(delta(rawKnownTargets[i].x, "velX"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain/(dist/1000),"velX"..i),
+                    y=EMA(delta(rawKnownTargets[i].y, "velY"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain/(dist/1000),"velY"..i),
+                    z=EMA(delta(rawKnownTargets[i].z, "velZ"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain/(dist/1000),"velZ"..i)
                 }
             end
 
@@ -192,7 +200,7 @@ function onTick()
     end
 end
 
-zoom = 5
+zoom = 10
 function onDraw()
     w=screen.getWidth()
 	h=screen.getHeight()
@@ -203,18 +211,18 @@ function onDraw()
 	    screen.drawRectF(pixelX,pixelY,1,1)
     end
 
-    if filteredKnownTargets[1] then
-        screen.drawText(1,1,math.floor(filteredKnownTargets[1].x))
-        screen.drawText(1,10,math.floor(filteredKnownTargets[1].y))
+    if knownTargets[1] then
+        screen.drawText(1,1,math.floor(knownTargets[1].x))
+        screen.drawText(1,10,math.floor(knownTargets[1].y))
     else
         screen.drawText(1,1,"nuh uh")
     end
 
-    if filteredVel[1] then
-        screen.drawText(50,1,math.floor(filteredVel[1].x*100)/100)
-        screen.drawText(50,10,math.floor(filteredVel[1].y*100)/100)
-    else
-        screen.drawText(50,1,"nuh uh")
+    for i,v in pairs(filteredVel) do
+        screen.drawText(50,1,math.floor(v.x*100)/100)
+        screen.drawText(50,10,math.floor(v.y*100)/100)
+        screen.drawText(50,19,math.floor(v.z*100)/100)
+        break
     end
 
     screen.drawText(1,30,debug)
