@@ -39,6 +39,8 @@ function distVec(A,B)
     return math.sqrt((A.x-B.x)^2+(A.y-B.y)^2+(A.z-B.z)^2)
 end
 
+function len(A) return distVec(vec(),A) end
+
 function delta(x, name)
     if not ksnfi then ksnfi = {} end
     local delta = x-(ksnfi[name] or x)
@@ -93,6 +95,7 @@ maxLifetime = 900
 knownTargets = {}
 filteredKnownTargets = {}
 filteredVel = {}
+averageVel = {}
 rawKnownTargets = {}
 
 function sortContacts(contact)
@@ -131,33 +134,40 @@ function updateTimes()
         if target.time <=0 then
             knownTargets[i] = nil --remove old targets
             filteredKnownTargets[i] = nil
+            filteredVel[i] = nil
             reset(i)
         else
             local dist = distVec(pos, target)
+            local distFactor = dist/5000
             if knownTargets[i].time ~= maxLifetime then --when not updated:
                 knownTargets[i].x = knownTargets[i].x + filteredVel[i].x --interpolate with filtered velocity
                 knownTargets[i].y = knownTargets[i].y + filteredVel[i].y
                 knownTargets[i].z = knownTargets[i].z + filteredVel[i].z
                 filteredKnownTargets[i] = {
-                    x = EMAext(target.x, posGain/(dist/1000), velGain/(dist/1000), "knownX"..i), --update the EMA filter
-                    y = EMAext(target.y, posGain/(dist/1000), velGain/(dist/1000), "knownY"..i),
-                    z = EMAext(target.z, posGain/(dist/1000), velGain/(dist/1000), "knownZ"..i),
+                    x = EMAext(target.x, posGain/distFactor, velGain/distFactor, "knownX"..i), --update the EMA filter
+                    y = EMAext(target.y, posGain/distFactor, velGain/distFactor, "knownY"..i),
+                    z = EMAext(target.z, posGain/distFactor, velGain/distFactor, "knownZ"..i),
                     time = target.time
                 }
             else --when updated:
                 filteredKnownTargets[i] = { --update the EMA filter
-                    x = EMAext(target.x, posGain/(dist/1000), velGain/(dist/1000), "knownX"..i),
-                    y = EMAext(target.y, posGain/(dist/1000), velGain/(dist/1000), "knownY"..i),
-                    z = EMAext(target.z, posGain/(dist/1000), velGain/(dist/1000), "knownZ"..i),
+                    x = EMAext(target.x, posGain/distFactor, velGain/distFactor, "knownX"..i),
+                    y = EMAext(target.y, posGain/distFactor, velGain/distFactor, "knownY"..i),
+                    z = EMAext(target.z, posGain/distFactor, velGain/distFactor, "knownZ"..i),
                     time = target.time
                 }
 
                 --filter the velocity
                 debug = (maxLifetime-(target.lastTime or maxLifetime-1))
                 filteredVel[i] = {
-                    x=EMA(delta(rawKnownTargets[i].x, "velX"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain/(dist/1000),"velX"..i),
-                    y=EMA(delta(rawKnownTargets[i].y, "velY"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain/(dist/1000),"velY"..i),
-                    z=EMA(delta(rawKnownTargets[i].z, "velZ"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain/(dist/1000),"velZ"..i)
+                    x=EMA(delta(rawKnownTargets[i].x, "velX"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain/distFactor,"velX"..i),
+                    y=EMA(delta(rawKnownTargets[i].y, "velY"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain/distFactor,"velY"..i),
+                    z=EMA(delta(rawKnownTargets[i].z, "velZ"..i)/math.max(maxLifetime-(target.lastTime or maxLifetime-1),1),extrapolationGain/distFactor,"velZ"..i)
+                }
+                averageVel[i] = {
+                    x=EMA(filteredVel[i].x, 0.1/distFactor, "velAvX"..i),
+                    y=EMA(filteredVel[i].y, 0.1/distFactor, "velAvY"..i),
+                    z=EMA(filteredVel[i].z, 0.1/distFactor, "velAvZ"..i)
                 }
             end
 
@@ -200,15 +210,20 @@ function onTick()
     end
 end
 
-zoom = 10
+zoom = 45
 function onDraw()
     w=screen.getWidth()
 	h=screen.getHeight()
 	screen.drawMap(pos.x,pos.y,zoom)
-    screen.setColor(255,0,0)
-	for i,v in pairs(knownTargets) do
+    
+	for i,v in pairs(filteredKnownTargets) do
+        local c = len(averageVel[i]) < (0.065*distVec(v,pos)/1000+0.2) and 0 or 255
+        screen.setColor(c,255-c,0)
+
         pixelX, pixelY = map.mapToScreen(pos.x, pos.y, zoom, w, h, v.x, v.y)
 	    screen.drawRectF(pixelX,pixelY,1,1)
+        screen.drawText(pixelX+3,pixelY,math.floor(len(averageVel[i])*1000)/1000)
+        screen.drawText(pixelX+3,pixelY+6,math.floor((0.065*distVec(v,pos)/1000+0.2)*1000)/1000)
     end
 
     if knownTargets[1] then
@@ -218,12 +233,18 @@ function onDraw()
         screen.drawText(1,1,"nuh uh")
     end
 
-    for i,v in pairs(filteredVel) do
-        screen.drawText(50,1,math.floor(v.x*100)/100)
-        screen.drawText(50,10,math.floor(v.y*100)/100)
-        screen.drawText(50,19,math.floor(v.z*100)/100)
-        break
-    end
+    --for i,v in pairs(filteredVel) do
+    --    screen.drawText(50,1,math.floor(v.x*100)/100)
+    --    screen.drawText(50,10,math.floor(v.y*100)/100)
+    --    screen.drawText(50,19,math.floor(v.z*100)/100)
+    --    break
+    --end
+    --for i,v in pairs(averageVel) do
+    --    screen.drawText(50,41,math.floor(v.x*100)/100)
+    --    screen.drawText(50,50,math.floor(v.y*100)/100)
+    --    screen.drawText(50,59,math.floor(v.z*100)/100)
+    --    break
+    --end
 
     screen.drawText(1,30,debug)
 end
